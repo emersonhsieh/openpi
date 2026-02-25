@@ -499,25 +499,34 @@ def quantize_state_dict(
       If E4M3, a companion ``{key}_scale`` tensor (in ``vpu_output`` dtype) is stored.
     """
     quantized: dict[str, torch.Tensor] = {}
-    mxu_count = 0
-    vpu_count = 0
+    mxu_input_count = 0   # weight matrices quantized to mxu_input dtype
+    mxu_output_count = 0  # scale tensors stored in mxu_output dtype (only when mxu_input is E4M3)
+    vpu_input_count = 0   # bias/norm/embedding tensors quantized to vpu_input dtype
+    vpu_output_count = 0  # scale tensors stored in vpu_output dtype (only when vpu_input is E4M3)
 
     for key, tensor in state_dict.items():
         if is_mxu_weight(key):
             q, scale = _quantize_tensor(tensor, mxu_input)
             quantized[key] = q
+            mxu_input_count += 1
             if scale is not None:
                 quantized[f"{key}_scale"] = scale.to(QDTYPE_TO_TORCH[mxu_output])
-            mxu_count += 1
+                mxu_output_count += 1
         else:
             q, scale = _quantize_tensor(tensor, vpu_input)
             quantized[key] = q
+            vpu_input_count += 1
             if scale is not None:
                 quantized[f"{key}_scale"] = scale.to(QDTYPE_TO_TORCH[vpu_output])
-            vpu_count += 1
+                vpu_output_count += 1
 
-    print(f"Quantized {mxu_count} MXU weight tensors to {mxu_input.value}, "
-          f"{vpu_count} VPU tensors to {vpu_input.value}")
+    print(f"MXU input:  {mxu_input_count} weight tensors -> {mxu_input.value}")
+    print(f"MXU output: {mxu_output_count} scale tensors  -> {mxu_output.value}"
+          + (" (none needed, mxu_input is not E4M3)" if mxu_output_count == 0 else ""))
+    print(f"VPU input:  {vpu_input_count} param tensors   -> {vpu_input.value}")
+    print(f"VPU output: {vpu_output_count} scale tensors  -> {vpu_output.value}"
+          + (" (none needed, vpu_input is not E4M3)" if vpu_output_count == 0 else ""))
+    print(f"Total tensors saved: {len(quantized)}")
     return quantized
 
 
