@@ -243,7 +243,28 @@ class BaseModelConfig(abc.ABC):
     def load_pytorch(self, train_config, weight_path: str):
         logger.info(f"train_config: {train_config}")
         model = pi0_pytorch.PI0Pytorch(config=train_config.model)
-        safetensors.torch.load_model(model, weight_path)
+
+        # Auto-detect quantized safetensors (contains _scale companion keys).
+        # If quantized, dequantize E4M3 weights back to bfloat16 before loading.
+        raw = safetensors.torch.load_file(weight_path, device="cpu")
+        has_scales = any(k.endswith("_scale") for k in raw)
+        if has_scales:
+            logger.info("Detected quantized safetensors — dequantizing to bfloat16")
+            scale_keys = {k for k in raw if k.endswith("_scale")}
+            base_keys_with_scale = {k.removesuffix("_scale") for k in scale_keys}
+            state_dict: dict[str, torch.Tensor] = {}
+            for key, tensor in raw.items():
+                if key in scale_keys:
+                    continue
+                if key in base_keys_with_scale:
+                    scale = raw[f"{key}_scale"].to(torch.bfloat16)
+                    state_dict[key] = tensor.to(torch.bfloat16) * scale
+                else:
+                    state_dict[key] = tensor.to(torch.bfloat16)
+            model.load_state_dict(state_dict, strict=False)
+        else:
+            safetensors.torch.load_model(model, weight_path)
+
         return model
 
     @abc.abstractmethod

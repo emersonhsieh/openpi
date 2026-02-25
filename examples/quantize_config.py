@@ -163,6 +163,61 @@ def quantize_state_dict(
 
 
 # ---------------------------------------------------------------------------
+# Dequantization (for loading quantized safetensors at inference time)
+# ---------------------------------------------------------------------------
+
+def dequantize_state_dict(
+    raw: dict[str, torch.Tensor],
+    output_dtype: torch.dtype = torch.bfloat16,
+) -> dict[str, torch.Tensor]:
+    """Dequantize a state dict produced by ``quantize_state_dict``.
+
+    For every key that has a companion ``{key}_scale`` tensor, reconstruct the
+    full-precision weight:  ``dequantized = quantized.to(output_dtype) * scale``
+
+    Non-quantized tensors are cast to ``output_dtype`` as-is.
+    Scale tensors are consumed and not included in the output.
+
+    Returns a state dict that is compatible with ``model.load_state_dict()``.
+    """
+    # Collect all scale keys first
+    scale_keys = {k for k in raw if k.endswith("_scale")}
+    base_keys_with_scale = {k.removesuffix("_scale") for k in scale_keys}
+
+    dequantized: dict[str, torch.Tensor] = {}
+    for key, tensor in raw.items():
+        if key in scale_keys:
+            continue  # consumed below
+        if key in base_keys_with_scale:
+            scale = raw[f"{key}_scale"]
+            dequantized[key] = tensor.to(output_dtype) * scale.to(output_dtype)
+        else:
+            dequantized[key] = tensor.to(output_dtype)
+
+    return dequantized
+
+
+def load_quantized_model(
+    model_config: "openpi.models.pi0_config.Pi0Config",
+    weight_path: str,
+    device: str = "cpu",
+) -> "openpi.models_pytorch.pi0_pytorch.PI0Pytorch":
+    """Load a quantized safetensors file into a PI0Pytorch model.
+
+    1. Reads the raw quantized tensors (E4M3 + scales).
+    2. Dequantizes everything back to bfloat16.
+    3. Creates the model and loads the state dict.
+    """
+    raw = safetensors.torch.load_file(weight_path, device=device)
+    state_dict = dequantize_state_dict(raw, output_dtype=torch.bfloat16)
+
+    model = openpi.models_pytorch.pi0_pytorch.PI0Pytorch(config=model_config)
+    model.load_state_dict(state_dict, strict=False)
+    model.paligemma_with_expert.to_bfloat16_for_selected_params("bfloat16")
+    return model
+
+
+# ---------------------------------------------------------------------------
 # Conversion entry point (mirrors convert_jax_model_to_pytorch but with quant)
 # ---------------------------------------------------------------------------
 
