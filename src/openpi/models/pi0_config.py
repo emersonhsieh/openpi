@@ -13,6 +13,7 @@ import openpi.shared.nnx_utils as nnx_utils
 
 if TYPE_CHECKING:
     from openpi.models.pi0 import Pi0
+    from openpi.models.pi0_quantized import Pi0Quantized
 
 
 @dataclasses.dataclass(frozen=True)
@@ -106,3 +107,22 @@ class Pi0Config(_model.BaseModelConfig):
         if not filters:
             return nnx.Nothing
         return nnx.All(*filters)
+
+
+@dataclasses.dataclass(frozen=True)
+class Pi0QuantizedConfig(Pi0Config):
+    """Pi0 with E4M3 quantised MXU and BF16 VPU.
+
+    Same architecture as Pi0 but every matmul casts both operands to
+    float8_e4m3fn with bfloat16 accumulation.  VPU ops (norms, biases,
+    embeddings) stay bfloat16.
+
+    Loads standard Pi0 / Pi0.5 checkpoints — BF16 weights are used as-is
+    and cast to E4M3 on the fly inside each quantised layer.
+    """
+
+    @override
+    def create(self, rng: at.KeyArrayLike) -> "Pi0Quantized":
+        from openpi.models.pi0_quantized import Pi0Quantized
+
+        return Pi0Quantized(self, rngs=nnx.Rngs(rng))
